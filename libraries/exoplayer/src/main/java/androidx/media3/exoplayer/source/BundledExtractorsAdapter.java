@@ -23,6 +23,8 @@ import androidx.annotation.Nullable;
 import androidx.media3.common.C;
 import androidx.media3.common.DataReader;
 import androidx.media3.common.util.UnstableApi;
+import androidx.media3.datasource.DataSource;
+import androidx.media3.datasource.DataSpec;
 import androidx.media3.extractor.DefaultExtractorInput;
 import androidx.media3.extractor.Extractor;
 import androidx.media3.extractor.ExtractorInput;
@@ -30,6 +32,7 @@ import androidx.media3.extractor.ExtractorOutput;
 import androidx.media3.extractor.ExtractorsFactory;
 import androidx.media3.extractor.PositionHolder;
 import androidx.media3.extractor.SniffFailure;
+import androidx.media3.extractor.mkv.MatroskaExtractor;
 import androidx.media3.extractor.mp3.Mp3Extractor;
 import com.google.common.base.Joiner;
 import com.google.common.collect.ImmutableList;
@@ -47,6 +50,7 @@ import java.util.Map;
 public final class BundledExtractorsAdapter implements ProgressiveMediaExtractor {
 
   private final ExtractorsFactory extractorsFactory;
+  @Nullable private final DataSource.Factory dataSourceFactory;
 
   @Nullable private Extractor extractor;
   @Nullable private ExtractorInput extractorInput;
@@ -57,7 +61,12 @@ public final class BundledExtractorsAdapter implements ProgressiveMediaExtractor
    * @param extractorsFactory The {@link ExtractorsFactory} providing the extractors to choose from.
    */
   public BundledExtractorsAdapter(ExtractorsFactory extractorsFactory) {
+    this(extractorsFactory, /* dataSourceFactory= */ null);
+  }
+
+  public BundledExtractorsAdapter(ExtractorsFactory extractorsFactory, @Nullable DataSource.Factory dataSourceFactory) {
     this.extractorsFactory = extractorsFactory;
+    this.dataSourceFactory = dataSourceFactory;
   }
 
   @Override
@@ -111,6 +120,7 @@ public final class BundledExtractorsAdapter implements ProgressiveMediaExtractor
       }
     }
     extractor.init(output);
+    maybeConfigureMatroskaBackgroundCues(extractor.getUnderlyingImplementation(), uri);
   }
 
   @Override
@@ -146,5 +156,27 @@ public final class BundledExtractorsAdapter implements ProgressiveMediaExtractor
   @Override
   public int read(PositionHolder positionHolder) throws IOException {
     return checkNotNull(extractor).read(checkNotNull(extractorInput), positionHolder);
+  }
+
+  private void maybeConfigureMatroskaBackgroundCues(Extractor underlying, Uri uri) {
+    if (dataSourceFactory == null || !(underlying instanceof MatroskaExtractor)) {
+      return;
+    }
+    DataSource.Factory factory = dataSourceFactory;
+    ((MatroskaExtractor) underlying).setBackgroundDataProviderFactory(position -> {
+      DataSource ds = factory.createDataSource();
+      ds.open(new DataSpec(uri, position, C.LENGTH_UNSET));
+      return new MatroskaExtractor.BackgroundDataProvider() {
+        @Override
+        public int read(byte[] buffer, int offset, int length) throws IOException {
+          return ds.read(buffer, offset, length);
+        }
+
+        @Override
+        public void close() throws IOException {
+          ds.close();
+        }
+      };
+    });
   }
 }

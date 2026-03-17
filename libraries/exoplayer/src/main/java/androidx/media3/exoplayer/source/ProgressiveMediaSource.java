@@ -132,7 +132,7 @@ public final class ProgressiveMediaSource extends BaseMediaSource
      *     the media from its container.
      */
     public Factory(DataSource.Factory dataSourceFactory, ExtractorsFactory extractorsFactory) {
-      this(dataSourceFactory, playerId -> new BundledExtractorsAdapter(extractorsFactory));
+      this(dataSourceFactory, playerId -> new BundledExtractorsAdapter(extractorsFactory, dataSourceFactory));
     }
 
     /**

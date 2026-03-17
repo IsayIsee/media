@@ -503,6 +503,7 @@ public class MatroskaExtractor implements Extractor {
   private @Nullable SeekMap accurateSeekMap;
   private @Nullable Thread cuesLoaderThread;
   private long pendingSeekTimeUs = C.TIME_UNSET;
+  private long cuesSkipPosition = C.INDEX_UNSET;
 
   // Reading state.
   private boolean haveOutputSample;
@@ -641,6 +642,7 @@ public class MatroskaExtractor implements Extractor {
     seekForSeekHead = false;
     seekPositionAfterSeekHead = C.INDEX_UNSET;
     seekHeadChainCount = 0;
+    cuesSkipPosition = C.INDEX_UNSET;
     pendingSeekTimeUs = (deferredSeekForCues && position != 0) ? timeUs : C.TIME_UNSET;
     for (int i = 0; i < tracks.size(); i++) {
       tracks.valueAt(i).reset();
@@ -661,13 +663,13 @@ public class MatroskaExtractor implements Extractor {
     if (bgSeekMap != null) {
       backgroundLoadedSeekMap = null;
       accurateSeekMap = bgSeekMap;
+      deferredSeekForCues = false;
       extractorOutput.seekMap(bgSeekMap);
     }
     if (pendingSeekTimeUs != C.TIME_UNSET && accurateSeekMap != null) {
       SeekMap.SeekPoints seekPoints = accurateSeekMap.getSeekPoints(pendingSeekTimeUs);
       seekPosition.position = seekPoints.first.position;
       pendingSeekTimeUs = C.TIME_UNSET;
-      deferredSeekForCues = false;
       resetParserStateForSeek();
       return Extractor.RESULT_SEEK;
     }
@@ -724,9 +726,6 @@ public class MatroskaExtractor implements Extractor {
       case ID_CONTENT_ENCRYPTION:
       case ID_CONTENT_ENCRYPTION_AES_SETTINGS:
       case ID_CUES:
-        if (sentSeekMap) {
-          return EbmlProcessor.ELEMENT_TYPE_UNKNOWN;
-        }
       case ID_CUE_POINT:
       case ID_CUE_TRACK_POSITIONS:
       case ID_BLOCK_GROUP:
@@ -848,7 +847,9 @@ public class MatroskaExtractor implements Extractor {
         seekEntryPosition = C.INDEX_UNSET;
         break;
       case ID_CUES:
-        if (!sentSeekMap || deferredSeekForCues) {
+        if (sentSeekMap && !deferredSeekForCues) {
+          cuesSkipPosition = contentPosition + contentSize;
+        } else {
           inCuesElement = true;
         }
         break;
@@ -2371,6 +2372,12 @@ public class MatroskaExtractor implements Extractor {
    * @return Whether the seek position was updated.
    */
   private boolean maybeSeekForCues(PositionHolder seekPosition, long currentPosition) {
+    if (cuesSkipPosition != C.INDEX_UNSET) {
+      seekPosition.position = cuesSkipPosition;
+      cuesSkipPosition = C.INDEX_UNSET;
+      resetParserStateForSeek();
+      return true;
+    }
     if (seekForSeekHead) {
       seekForSeekHead = false;
       if (cuesContentPosition == C.INDEX_UNSET && !pendingSeekHeadPositions.isEmpty()) {
@@ -2695,9 +2702,11 @@ public class MatroskaExtractor implements Extractor {
           trueHdSampleRechunker = new TrueHdSampleRechunker();
           break;
         case CODEC_ID_DTS:
-        case CODEC_ID_DTS_EXPRESS:
           mimeType = MimeTypes.AUDIO_DTS; // temporary
           waitingForDtsAnalysis = true;
+          break;
+        case CODEC_ID_DTS_EXPRESS:
+          mimeType = MimeTypes.AUDIO_DTS_EXPRESS;
           break;
         case CODEC_ID_DTS_LOSSLESS:
           mimeType = MimeTypes.AUDIO_DTS_HD;

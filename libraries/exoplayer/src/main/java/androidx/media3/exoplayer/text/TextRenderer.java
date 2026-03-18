@@ -113,6 +113,8 @@ public final class TextRenderer extends BaseRenderer implements Callback {
   @Nullable private SubtitleOutputBuffer subtitle;
   @Nullable private SubtitleOutputBuffer nextSubtitle;
   private int nextSubtitleEventIndex;
+  private ImmutableList<Cue> accumulatedSameTimeCues = ImmutableList.of();
+  private long accumulatedSameTimeUs = C.TIME_UNSET;
 
   // Fields used with both CuesWithTiming and Subtitle objects
   @Nullable private final Handler outputHandler;
@@ -292,8 +294,12 @@ public final class TextRenderer extends BaseRenderer implements Callback {
 
   @RequiresNonNull("this.cuesResolver")
   private void renderFromCuesWithTiming(long positionUs) {
-    boolean outputNeedsUpdating = readAndDecodeCuesWithTiming(positionUs);
-
+    boolean outputNeedsUpdating = false;
+    boolean read;
+    do {
+      read = readAndDecodeCuesWithTiming(positionUs);
+      outputNeedsUpdating |= read;
+    } while (read);
     long nextCueChangeTimeUs = cuesResolver.getNextCueChangeTimeUs(lastRendererPositionUs);
     if (nextCueChangeTimeUs == C.TIME_END_OF_SOURCE && inputStreamEnded && !outputNeedsUpdating) {
       outputStreamEnded = true;
@@ -364,17 +370,7 @@ public final class TextRenderer extends BaseRenderer implements Callback {
       return;
     }
 
-    boolean textRendererNeedsUpdate = false;
-    if (subtitle != null) {
-      // We're iterating through the events in a subtitle. Set textRendererNeedsUpdate if we
-      // advance to the next event.
-      long subtitleNextEventTimeUs = getNextEventTime();
-      while (subtitleNextEventTimeUs <= positionUs) {
-        nextSubtitleEventIndex++;
-        subtitleNextEventTimeUs = getNextEventTime();
-        textRendererNeedsUpdate = true;
-      }
-    }
+    boolean textRendererNeedsUpdate = advanceSubtitleEventIndex(positionUs);
     if (nextSubtitle != null) {
       SubtitleOutputBuffer nextSubtitle = this.nextSubtitle;
       if (nextSubtitle.isEndOfStream()) {
@@ -388,23 +384,25 @@ public final class TextRenderer extends BaseRenderer implements Callback {
         }
       } else if (nextSubtitle.timeUs <= positionUs) {
         // Advance to the next subtitle. Sync the next event index and trigger an update.
-        if (subtitle != null) {
-          subtitle.release();
+        if (subtitle != null && subtitle.timeUs == nextSubtitle.timeUs) {
+          if (!advanceToSameTimestampSubtitle(positionUs)) {
+            return;
+          }
+          textRendererNeedsUpdate = false;
+        } else {
+          if (subtitle != null) {
+            subtitle.release();
+          }
+          nextSubtitleEventIndex = nextSubtitle.getNextEventTimeIndex(positionUs);
+          subtitle = nextSubtitle;
+          this.nextSubtitle = null;
+          textRendererNeedsUpdate = true;
         }
-        nextSubtitleEventIndex = nextSubtitle.getNextEventTimeIndex(positionUs);
-        subtitle = nextSubtitle;
-        this.nextSubtitle = null;
-        textRendererNeedsUpdate = true;
       }
     }
 
-    if (textRendererNeedsUpdate) {
-      // If textRendererNeedsUpdate then subtitle must be non-null.
-      checkNotNull(subtitle);
-      // textRendererNeedsUpdate is set and we're playing. Update the renderer.
-      long presentationTimeUs = getPresentationTimeUs(getCurrentEventTimeUs(positionUs));
-      CueGroup cueGroup = new CueGroup(subtitle.getCues(positionUs), presentationTimeUs);
-      updateOutput(cueGroup);
+    if (textRendererNeedsUpdate && !outputCurrentSubtitleCues(positionUs)) {
+      return;
     }
 
     if (decoderReplacementState == REPLACEMENT_STATE_WAIT_END_OF_STREAM) {
@@ -455,6 +453,110 @@ public final class TextRenderer extends BaseRenderer implements Callback {
     } catch (SubtitleDecoderException e) {
       handleDecoderError(e);
     }
+  }
+
+  /**
+   * Advances {@link #nextSubtitleEventIndex} past all events at or before {@code positionUs}.
+   *
+   * @return true if the index was advanced, meaning the output needs updating.
+   */
+  private boolean advanceSubtitleEventIndex(long positionUs) {
+    if (subtitle == null) {
+      return false;
+    }
+    boolean advanced = false;
+    long nextEventTimeUs = getNextEventTime();
+    while (nextEventTimeUs <= positionUs) {
+      nextSubtitleEventIndex++;
+      nextEventTimeUs = getNextEventTime();
+      advanced = true;
+    }
+    return advanced;
+  }
+
+  /**
+   * Advances to {@link #nextSubtitle} when it shares the same timestamp as {@link #subtitle},
+   * merging cues from all concurrent same-timestamp tracks and calling {@link #updateOutput}.
+   * Uses {@link #accumulatedSameTimeCues} to handle tracks that arrived in prior render cycles.
+   *
+   * <p>Precondition: {@code subtitle != null && subtitle.timeUs == nextSubtitle.timeUs}.
+   *
+   * @return false if a decoder error occurred (already handled); the caller should return
+   *     immediately.
+   */
+  private boolean advanceToSameTimestampSubtitle(long positionUs) {
+    long sharedTimeUs = checkNotNull(subtitle).timeUs;
+    ImmutableList.Builder<Cue> builder = ImmutableList.<Cue>builder();
+    if (accumulatedSameTimeUs == sharedTimeUs) {
+      builder.addAll(accumulatedSameTimeCues);
+    } else {
+      builder.addAll(subtitle.getCues(positionUs));
+    }
+    subtitle.release();
+    subtitle = checkNotNull(nextSubtitle);
+    this.nextSubtitle = null;
+    nextSubtitleEventIndex = subtitle.getNextEventTimeIndex(positionUs);
+    builder.addAll(subtitle.getCues(positionUs));
+    if (!drainSameTimestampBuffers(positionUs, sharedTimeUs, builder)) {
+      return false;
+    }
+    ImmutableList<Cue> mergedCues = builder.build();
+    accumulatedSameTimeCues = mergedCues;
+    accumulatedSameTimeUs = sharedTimeUs;
+    updateOutput(new CueGroup(mergedCues, getPresentationTimeUs(getCurrentEventTimeUs(positionUs))));
+    return true;
+  }
+
+  /**
+   * Drains all output buffers from the subtitle decoder whose {@code timeUs} equals {@code
+   * sharedTimeUs}, appending their cues to {@code builder}. The first non-matching or
+   * end-of-stream buffer is stored in {@link #nextSubtitle}.
+   *
+   * @return false if a {@link SubtitleDecoderException} occurred (already handled); the caller
+   *     should return immediately.
+   */
+  private boolean drainSameTimestampBuffers(
+      long positionUs, long sharedTimeUs, ImmutableList.Builder<Cue> builder) {
+    try {
+      SubtitleOutputBuffer extra;
+      while ((extra = checkNotNull(subtitleDecoder).dequeueOutputBuffer()) != null) {
+        if (!extra.isEndOfStream() && extra.timeUs == sharedTimeUs) {
+          builder.addAll(extra.getCues(positionUs));
+          extra.release();
+        } else {
+          nextSubtitle = extra;
+          break;
+        }
+      }
+      return true;
+    } catch (SubtitleDecoderException e) {
+      handleDecoderError(e);
+      return false;
+    }
+  }
+
+  /**
+   * Outputs the current subtitle's cues, also draining any additional same-timestamp buffers from
+   * the decoder when {@link #nextSubtitle} is null. Updates {@link #accumulatedSameTimeCues} for
+   * new timestamps to support cross-render-cycle merging.
+   *
+   * <p>Precondition: {@link #subtitle} is non-null.
+   *
+   * @return false if a decoder error occurred (already handled); the caller should return immediately.
+   */
+  private boolean outputCurrentSubtitleCues(long positionUs) {
+    long subtitleTimeUs = checkNotNull(subtitle).timeUs;
+    ImmutableList.Builder<Cue> builder = ImmutableList.<Cue>builder().addAll(subtitle.getCues(positionUs));
+    if (nextSubtitle == null && !drainSameTimestampBuffers(positionUs, subtitleTimeUs, builder)) {
+      return false;
+    }
+    ImmutableList<Cue> cues = builder.build();
+    if (accumulatedSameTimeUs != subtitleTimeUs) {
+      accumulatedSameTimeCues = cues;
+      accumulatedSameTimeUs = subtitleTimeUs;
+    }
+    updateOutput(new CueGroup(cues, getPresentationTimeUs(getCurrentEventTimeUs(positionUs))));
+    return true;
   }
 
   @Override
@@ -514,6 +616,8 @@ public final class TextRenderer extends BaseRenderer implements Callback {
   private void releaseSubtitleBuffers() {
     nextSubtitleInputBuffer = null;
     nextSubtitleEventIndex = C.INDEX_UNSET;
+    accumulatedSameTimeCues = ImmutableList.of();
+    accumulatedSameTimeUs = C.TIME_UNSET;
     if (subtitle != null) {
       subtitle.release();
       subtitle = null;

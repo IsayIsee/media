@@ -53,6 +53,7 @@ import androidx.media3.extractor.ts.Ac3Extractor;
 import androidx.media3.extractor.ts.Ac4Extractor;
 import androidx.media3.extractor.ts.AdtsExtractor;
 import androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory;
+import androidx.media3.extractor.ts.M2tsExtractor;
 import androidx.media3.extractor.ts.PsExtractor;
 import androidx.media3.extractor.ts.TsExtractor;
 import androidx.media3.extractor.ts.TsPayloadReader;
@@ -145,7 +146,8 @@ public final class DefaultExtractorsFactory implements ExtractorsFactory {
         FileTypes.ISO,
         FileTypes.DSF,
         FileTypes.DFF,
-        FileTypes.DTS
+        FileTypes.DTS,
+        FileTypes.M2TS
       };
 
   private static final ExtensionLoader FLAC_EXTENSION_LOADER =
@@ -620,6 +622,9 @@ public final class DefaultExtractorsFactory implements ExtractorsFactory {
         break;
       case FileTypes.DTS:
         extractors.add(new DtsExtractor());
+        break;
+      case FileTypes.M2TS:
+        extractors.add(new M2tsExtractor(subtitleParserFactory));
         break;
       case FileTypes.WEBVTT:
       case FileTypes.UNKNOWN:

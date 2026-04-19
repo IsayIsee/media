@@ -85,9 +85,9 @@ public final class PesReader implements TsPayloadReader {
     reader.seek();
   }
 
-  public void enableRandomAccessIndicator(long seekTimeUs) {
+  public void enableRandomAccessIndicator() {
     if (reader instanceof H264Reader) {
-      ((H264Reader) reader).enableRandomAccessIndicator(seekTimeUs);
+      ((H264Reader) reader).enableRandomAccessIndicator();
     }
   }
 

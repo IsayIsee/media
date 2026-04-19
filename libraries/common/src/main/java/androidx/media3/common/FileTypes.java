@@ -75,7 +75,7 @@ public final class FileTypes {
   @Target(TYPE_USE)
   @IntDef({
     UNKNOWN, AC3, AC4, ADTS, AMR, FLAC, FLV, MATROSKA, MP3, MP4, OGG, PS, TS, WAV, WEBVTT, JPEG,
-    MIDI, AVI, PNG, WEBP, BMP, HEIF, AVIF, ASF, RM, ISO, DSF, DFF, DTS
+    MIDI, AVI, PNG, WEBP, BMP, HEIF, AVIF, ASF, RM, ISO, DSF, DFF, DTS, M2TS
   })
   public @interface Type {}
 
@@ -166,6 +166,9 @@ public final class FileTypes {
   /** File type for the raw DTS audio format. */
   public static final int DTS = 27;
 
+  /** File type for the M2TS (Blu-ray MPEG-2 Transport Stream) format. */
+  public static final int M2TS = 28;
+
   @VisibleForTesting /* package */ static final String HEADER_CONTENT_TYPE = "Content-Type";
 
   private static final String EXTENSION_AC3 = ".ac3";
@@ -217,6 +220,9 @@ public final class FileTypes {
   private static final String EXTENSION_DSF = ".dsf";
   private static final String EXTENSION_DFF = ".dff";
   private static final String EXTENSION_DTS = ".dts";
+  private static final String EXTENSION_M2TS = ".m2ts";
+  private static final String EXTENSION_MTS = ".mts";
+  private static final String EXTENSION_M2T = ".m2t";
 
   private FileTypes() {}
 
@@ -369,6 +375,10 @@ public final class FileTypes {
         || filename.endsWith(EXTENSION_MPG)
         || filename.endsWith(EXTENSION_M2P)) {
       return FileTypes.PS;
+    } else if (filename.endsWith(EXTENSION_M2TS)
+        || filename.endsWith(EXTENSION_MTS)
+        || filename.endsWith(EXTENSION_M2T)) {
+      return FileTypes.M2TS;
     } else if (filename.endsWith(EXTENSION_TS)
         || filename.startsWith(
             EXTENSION_PREFIX_TS,

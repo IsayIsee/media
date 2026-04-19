@@ -397,7 +397,7 @@ public final class PsExtractor implements Extractor {
      * STD buffer field, and a different PTS/DTS encoding without a fixed-length header.
      */
     private void consumeMpeg1Pes(ParsableByteArray data) throws ParserException {
-      timeUs = 0;
+      timeUs = C.TIME_UNSET;
       while (data.bytesLeft() > 0 && data.getData()[data.getPosition()] == (byte) 0xFF) {
         data.skipBytes(1);
       }
@@ -464,7 +464,7 @@ public final class PsExtractor implements Extractor {
     }
 
     private void parseHeaderExtension() {
-      timeUs = 0;
+      timeUs = C.TIME_UNSET;
       if (ptsFlag) {
         pesScratch.skipBits(4); // '0010' or '0011'
         long pts = (long) pesScratch.readBits(3) << 30;

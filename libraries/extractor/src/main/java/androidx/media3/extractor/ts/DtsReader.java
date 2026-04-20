@@ -273,7 +273,7 @@ public final class DtsReader implements ElementaryStreamReader {
               state = STATE_FINDING_EXTSS_HEADER_SIZE;
             } else {
               if (coreFormatPendingEmit) {
-                output.format(format);
+                output.format(checkNotNull(format));
                 coreFormatPendingEmit = false;
               }
               checkState(timeUs != C.TIME_UNSET);
@@ -310,7 +310,7 @@ public final class DtsReader implements ElementaryStreamReader {
   public void packetFinished(boolean isEndOfInput) {
     if (isEndOfInput && state == STATE_CHECKING_FOR_EXTSS_AFTER_CORE) {
       if (coreFormatPendingEmit) {
-        output.format(format);
+        output.format(checkNotNull(format));
         coreFormatPendingEmit = false;
       }
       if (timeUs != C.TIME_UNSET) {

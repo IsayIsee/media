@@ -20,6 +20,7 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.media3.common.util.ParsableByteArray;
 import androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory;
+import androidx.media3.extractor.ts.TsExtractor;
 import androidx.media3.extractor.ts.TsPayloadReader;
 import com.google.common.collect.ImmutableList;
 import java.util.ArrayDeque;
@@ -84,15 +85,27 @@ public final class BdmvTsPayloadReaderFactory implements TsPayloadReader.Factory
     if (clpi != null) {
       for (StreamInfo stream : clpi.streams) {
         if (!stream.languageCode.isEmpty()) {
-          Queue<String> queue = queues.get(stream.streamType);
+          int streamType = remapHdmvStreamType(stream.streamType);
+          Queue<String> queue = queues.get(streamType);
           if (queue == null) {
-            queues.put(stream.streamType, queue = new ArrayDeque<>());
+            queues.put(streamType, queue = new ArrayDeque<>());
           }
           queue.add(stream.languageCode);
         }
       }
     }
     return queues;
+  }
+
+  private static int remapHdmvStreamType(int streamType) {
+    if (streamType == TsExtractor.TS_STREAM_TYPE_DC2_H262) {
+      return TsExtractor.TS_STREAM_TYPE_HDMV_LPCM;
+    } else if (streamType == TsExtractor.TS_STREAM_TYPE_HDMV_DTS) {
+      return TsExtractor.TS_STREAM_TYPE_HDMV_DTS_AUTO;
+    } else if (streamType == TsExtractor.TS_STREAM_TYPE_SPLICE_INFO) {
+      return TsExtractor.TS_STREAM_TYPE_HDMV_DTS_HD_MASTER;
+    }
+    return streamType;
   }
 
   public int getDynamicRangeTypeForPid(int pid) {
@@ -133,7 +146,7 @@ public final class BdmvTsPayloadReaderFactory implements TsPayloadReader.Factory
       parseDolbyVisionDescriptor(esInfo.descriptorBytes);
     }
     String lang = resolveLanguage(streamType, esInfo);
-    if (lang != null && (esInfo.language == null || esInfo.language.isEmpty())) {
+    if (lang != null) {
       esInfo = new TsPayloadReader.EsInfo(esInfo.streamType, lang, esInfo.audioType, esInfo.dvbSubtitleInfos.isEmpty() ? null : esInfo.dvbSubtitleInfos, esInfo.descriptorBytes);
     }
     return delegate.createPayloadReader(streamType, esInfo);
@@ -142,7 +155,7 @@ public final class BdmvTsPayloadReaderFactory implements TsPayloadReader.Factory
   @Nullable
   private String resolveLanguage(int streamType, TsPayloadReader.EsInfo esInfo) {
     if (esInfo.language != null && !esInfo.language.isEmpty()) {
-      return esInfo.language;
+      return null;
     }
     Queue<String> queue = langQueues.get(streamType);
     return queue != null ? queue.poll() : null;

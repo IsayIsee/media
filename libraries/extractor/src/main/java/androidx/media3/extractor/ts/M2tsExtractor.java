@@ -34,7 +34,7 @@ public final class M2tsExtractor implements Extractor {
             TsExtractor.FLAG_IGNORE_SECTION_CRC | TsExtractor.FLAG_EMIT_RAW_SUBTITLE_DATA,
             subtitleParserFactory,
             new TimestampAdjuster(0),
-            new DefaultTsPayloadReaderFactory(0),
+            new DefaultTsPayloadReaderFactory(DefaultTsPayloadReaderFactory.FLAG_ENABLE_HDMV_DTS_AUDIO_STREAMS | DefaultTsPayloadReaderFactory.FLAG_IGNORE_SPLICE_INFO_STREAM),
             TsExtractor.DEFAULT_TIMESTAMP_SEARCH_BYTES,
             TsExtractor.M2TS_PACKET_SIZE);
   }

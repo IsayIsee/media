@@ -97,6 +97,7 @@ public final class DtsReader implements ElementaryStreamReader {
   private boolean coreFormatPendingEmit;
   private long timeUs;
   private boolean hasCore;
+  private boolean hasSeenExtss;
   private boolean skipExtssUntilCore;
 
   // XLL-X (DTS:X) scan state.
@@ -140,6 +141,7 @@ public final class DtsReader implements ElementaryStreamReader {
     xllXScanCountdown = 0;
     timeUs = C.TIME_UNSET;
     uhdAudioChunkId.set(0);
+    hasSeenExtss = false;
     coreFormatPendingEmit = false;
     skipExtssUntilCore = hasCore;
   }
@@ -308,7 +310,7 @@ public final class DtsReader implements ElementaryStreamReader {
 
   @Override
   public void packetFinished(boolean isEndOfInput) {
-    if (isEndOfInput && state == STATE_CHECKING_FOR_EXTSS_AFTER_CORE) {
+    if ((!hasSeenExtss || isEndOfInput) && state == STATE_CHECKING_FOR_EXTSS_AFTER_CORE) {
       if (coreFormatPendingEmit) {
         output.format(checkNotNull(format));
         coreFormatPendingEmit = false;
@@ -408,6 +410,7 @@ public final class DtsReader implements ElementaryStreamReader {
   /** Parses the DTS Extension Sub-stream header. */
   @RequiresNonNull("output")
   private void parseExtensionSubstreamHeader() throws ParserException {
+    hasSeenExtss = true;
     DtsUtil.DtsHeader dtsHeader = DtsUtil.parseDtsHdHeader(headerScratchBytes.getData());
     updateFormatWithDtsHeaderInfo(dtsHeader);
     sampleSize = dtsHeader.frameSize;

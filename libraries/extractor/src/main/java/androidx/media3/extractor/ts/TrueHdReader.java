@@ -282,7 +282,6 @@ public final class TrueHdReader implements ElementaryStreamReader {
     if (channelCount <= 0) {
       channelCount = 2;
     }
-    channelCount = Math.min(channelCount, 8);
     @Nullable String codecs = Ac3Util.isTrueHdAtmos(headerScratch) ? "atmos" : null;
     int peakDataRate = ((headerScratch[18] & 0x7F) << 8) | (headerScratch[19] & 0xFF);
     int peakBitrate = (int) Math.min(((long) peakDataRate * sampleRate) >> 4, Integer.MAX_VALUE);

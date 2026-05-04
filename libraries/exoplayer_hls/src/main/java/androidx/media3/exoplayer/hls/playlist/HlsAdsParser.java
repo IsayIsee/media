@@ -50,9 +50,6 @@ public final class HlsAdsParser {
       return m3u8;
     } else {
       Log.d(TAG, "Detected " + adSegments.size() + " ad segments to remove. Rebuilding playlist...");
-      for (String adSegment : adSegments) {
-        Log.d(TAG, "  -> Removing: " + adSegment);
-      }
       return rebuildM3u8(lines, adSegments);
     }
   }
@@ -89,26 +86,21 @@ public final class HlsAdsParser {
     int minorityBlockCount = 0;
     Set<String> adSegments = new HashSet<>();
     double adSizeThreshold = modeSize * AD_BLOCK_SIZE_RATIO;
+    int maxBlockSize = 0;
     for (List<String> block : analysisBlocks) {
-      if (block.size() < adSizeThreshold) {
+      int size = block.size();
+      if (size > maxBlockSize) maxBlockSize = size;
+      if (size < adSizeThreshold) {
         minorityBlockCount++;
         adSegments.addAll(block);
       }
     }
-    if (minorityBlockCount == 0) {
-      int maxSize = 0;
+    if (minorityBlockCount == 0 && modeSize * 2 < maxBlockSize) {
+      Log.d(TAG, "Discontinuity Analysis: Mode (" + modeSize + ") is much smaller than max block (" + maxBlockSize + "). Treating mode-sized-or-smaller blocks as ads.");
       for (List<String> block : analysisBlocks) {
-        if (block.size() > maxSize) {
-          maxSize = block.size();
-        }
-      }
-      if (modeSize < maxSize / 2) {
-        Log.d(TAG, "Discontinuity Analysis: Mode (" + modeSize + ") is much smaller than max block (" + maxSize + "). Treating mode-sized blocks as ads.");
-        for (List<String> block : analysisBlocks) {
-          if (block.size() <= modeSize) {
-            minorityBlockCount++;
-            adSegments.addAll(block);
-          }
+        if (block.size() <= modeSize) {
+          minorityBlockCount++;
+          adSegments.addAll(block);
         }
       }
     }
@@ -128,8 +120,7 @@ public final class HlsAdsParser {
     Map<Integer, Integer> sizeFrequencies = new HashMap<>();
     for (List<String> block : blocks) {
       int size = block.size();
-      Integer currentFreq = sizeFrequencies.get(size);
-      sizeFrequencies.put(size, currentFreq == null ? 1 : currentFreq + 1);
+      sizeFrequencies.put(size, sizeFrequencies.containsKey(size) ? sizeFrequencies.get(size) + 1 : 1);
     }
     int modeSize = -1;
     int maxFreq = -1;
@@ -197,33 +188,32 @@ public final class HlsAdsParser {
     if (allSegments.size() < 2) {
       return Collections.emptySet();
     }
-    Map<String, List<String>> structuralGroups = new HashMap<>();
-    for (String segment : allSegments) {
-      String identifier = getStructuralIdentifier(segment);
-      List<String> group = structuralGroups.get(identifier);
-      if (group == null) {
-        group = new ArrayList<>();
-        structuralGroups.put(identifier, group);
-      }
-      group.add(segment);
-    }
-    if (structuralGroups.size() > 1) {
+    Map<String, List<String>> structuralGroups = groupBy(allSegments, HlsAdsParser::getStructuralIdentifier);
+    if (structuralGroups.size() > 1 && structuralGroups.size() <= REASONABLE_GROUP_LIMIT) {
       return findMinorityGroup(structuralGroups);
     }
     return findAdsByPrefixAnalysis(allSegments);
   }
 
   private static String getStructuralIdentifier(String segmentUrl) {
+    int schemeEnd = segmentUrl.indexOf("://");
+    if (schemeEnd != -1) {
+      int hostEnd = segmentUrl.indexOf('/', schemeEnd + 3);
+      return hostEnd != -1 ? segmentUrl.substring(0, hostEnd) : segmentUrl;
+    }
     int lastSlashIndex = segmentUrl.lastIndexOf('/');
     return lastSlashIndex != -1 ? segmentUrl.substring(0, lastSlashIndex) : DEFAULT_GROUP_IDENTIFIER;
   }
 
   private static Set<String> findMinorityGroup(Map<String, List<String>> groups) {
-    int maxSize = 0;
+    int totalSize = 0;
     for (List<String> segments : groups.values()) {
-      if (segments.size() > maxSize) {
-        maxSize = segments.size();
-      }
+      totalSize += segments.size();
+    }
+    int maxSize = getMaxGroupSize(groups);
+    if (maxSize * 2 <= totalSize) {
+      Log.d(TAG, "findMinorityGroup: no clear dominant group (" + maxSize + "/" + totalSize + "). Skipping.");
+      return Collections.emptySet();
     }
     Set<String> adSegments = new HashSet<>();
     for (List<String> segments : groups.values()) {
@@ -239,23 +229,11 @@ public final class HlsAdsParser {
     if (optimalPrefixLength == -1) {
       return Collections.emptySet();
     }
-    Map<String, List<String>> groups = groupSegmentsByIdentifier(segments, optimalPrefixLength);
+    Map<String, List<String>> groups = groupBy(segments, s -> s.length() > optimalPrefixLength ? s.substring(0, optimalPrefixLength) : s);
     if (groups.size() <= 1 || groups.size() > REASONABLE_GROUP_LIMIT) {
       return Collections.emptySet();
     }
-    int maxGroupSize = 0;
-    for (List<String> group : groups.values()) {
-      if (group.size() > maxGroupSize) {
-        maxGroupSize = group.size();
-      }
-    }
-    Set<String> adSegments = new HashSet<>();
-    for (List<String> group : groups.values()) {
-      if (group.size() < maxGroupSize) {
-        adSegments.addAll(group);
-      }
-    }
-    return adSegments;
+    return findMinorityGroup(groups);
   }
 
   private static int findOptimalPrefixLength(List<String> segments) {
@@ -272,17 +250,13 @@ public final class HlsAdsParser {
     double highestScore = 0.0;
     int maxLength = shortestSegmentLength - SEQUENCE_NUMBER_RESERVED_LENGTH;
     for (int length = MIN_PREFIX_LENGTH_TO_TEST; length < maxLength; length++) {
-      Map<String, List<String>> groups = groupSegmentsByIdentifier(segments, length);
+      final int len = length;
+      Map<String, List<String>> groups = groupBy(segments, s -> s.length() > len ? s.substring(0, len) : s);
       int groupCount = groups.size();
       if (groupCount <= 1 || groupCount > REASONABLE_GROUP_LIMIT) {
         continue;
       }
-      int maxGroupSize = 0;
-      for (List<String> group : groups.values()) {
-        if (group.size() > maxGroupSize) {
-          maxGroupSize = group.size();
-        }
-      }
+      int maxGroupSize = getMaxGroupSize(groups);
       double score = (double) maxGroupSize / segments.size();
       if (score >= MIN_MAJORITY_GROUP_RATIO && score > highestScore) {
         highestScore = score;
@@ -292,22 +266,30 @@ public final class HlsAdsParser {
     return bestLength;
   }
 
-  private static Map<String, List<String>> groupSegmentsByIdentifier(List<String> allSegments, int prefixLength) {
+  private static Map<String, List<String>> groupBy(List<String> segments, Classifier keyFn) {
     Map<String, List<String>> groups = new HashMap<>();
-    for (String segment : allSegments) {
-      String identifier = getPrefixIdentifier(segment, prefixLength);
-      List<String> group = groups.get(identifier);
+    for (String segment : segments) {
+      String key = keyFn.classify(segment);
+      List<String> group = groups.get(key);
       if (group == null) {
         group = new ArrayList<>();
-        groups.put(identifier, group);
+        groups.put(key, group);
       }
       group.add(segment);
     }
     return groups;
   }
 
-  private static String getPrefixIdentifier(String segmentUrl, int prefixLength) {
-    return segmentUrl.length() > prefixLength ? segmentUrl.substring(0, prefixLength) : segmentUrl;
+  private interface Classifier {
+    String classify(String segment);
+  }
+
+  private static int getMaxGroupSize(Map<String, List<String>> groups) {
+    int maxSize = 0;
+    for (List<String> group : groups.values()) {
+      if (group.size() > maxSize) maxSize = group.size();
+    }
+    return maxSize;
   }
 
   private static boolean isSegmentLine(String trimmedLine) {
@@ -332,8 +314,9 @@ public final class HlsAdsParser {
         continue;
       }
       if (line.startsWith(TAG_DURATION)) {
-        if (i + 1 < lines.length && adSegments.contains(lines[i + 1].trim())) {
-          i++;
+        int segIndex = findNextSegmentIndex(lines, i + 1);
+        if (segIndex < lines.length && adSegments.contains(lines[segIndex].trim())) {
+          i = segIndex;
           continue;
         }
       } else if (adSegments.contains(line)) {
@@ -359,5 +342,13 @@ public final class HlsAdsParser {
       result.add(line);
     }
     return result;
+  }
+
+  private static int findNextSegmentIndex(String[] lines, int fromIndex) {
+    int i = fromIndex;
+    while (i < lines.length && lines[i].trim().startsWith("#")) {
+      i++;
+    }
+    return i;
   }
 }
